@@ -2,17 +2,9 @@
 
 In this lab you will bootstrap a 3 node Kubernetes controller cluster. The following virtual machines will be used:
 
-```
-gcloud compute instances list
-```
-
-```
-NAME         ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP      STATUS
-controller0  us-central1-f  n1-standard-1               10.240.0.20  XXX.XXX.XXX.XXX  RUNNING
-controller1  us-central1-f  n1-standard-1               10.240.0.21  XXX.XXX.XXX.XXX  RUNNING
-controller2  us-central1-f  n1-standard-1               10.240.0.22  XXX.XXX.XXX.XXX  RUNNING
-etcd0        us-central1-f  n1-standard-1               10.240.0.10  XXX.XXX.XXX.XXX  RUNNING
-```
+* controller0
+* controller1
+* controller2
 
 In this lab you will also create a frontend load balancer with a public IP address for remote access to the API servers and H/A.
 
@@ -35,27 +27,38 @@ Each component is being run on the same machines for the following reasons:
 
 Run the following commands on `controller0`, `controller1`, `controller2`:
 
-> SSH into each machine using the `gcloud compute ssh` command
+### TLS Certificates
 
+The TLS certificates created in the [Setting up a CA and TLS Cert Generation](02-certificate-authority.md) lab will be used to secure communication between the Kubernetes API server and Kubernetes clients such as `kubectl` and the `kubelet` agent. The TLS certificates will also be used to authenticate the Kubernetes API server to etcd via TLC client auth.
 
-Move the TLS certificates in place:
+Copy the TLS certificates to the Kubernetes configuration directory:
 
 ```
 sudo mkdir -p /var/lib/kubernetes
 ```
 
 ```
-sudo mv ca.pem kubernetes-key.pem kubernetes.pem /var/lib/kubernetes/
+sudo cp ca.pem kubernetes-key.pem kubernetes.pem /var/lib/kubernetes/
 ```
 
-Download and install the Kubernetes controller binaries:
+### Download and install the Kubernetes controller binaries
+
+Download the official Kubernetes release binaries:
 
 ```
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/linux/amd64/kube-apiserver
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/linux/amd64/kube-controller-manager
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/linux/amd64/kube-scheduler
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/linux/amd64/kubectl
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/linux/amd64/kube-apiserver
 ```
+```
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/linux/amd64/kube-controller-manager
+```
+```
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/linux/amd64/kube-scheduler
+```
+```
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/linux/amd64/kubectl
+```
+
+Install the Kubernetes binaries:
 
 ```
 chmod +x kube-apiserver kube-controller-manager kube-scheduler kubectl
@@ -71,15 +74,27 @@ sudo mv kube-apiserver kube-controller-manager kube-scheduler kubectl /usr/bin/
 
 ##### Authentication
 
-[Token based authentication](http://kubernetes.io/docs/admin/authentication) will be used to limit access to Kubernetes API.
+[Token based authentication](http://kubernetes.io/docs/admin/authentication) will be used to limit access to the Kubernetes API. The authentication token is used by the following components:
+
+* kubelet (client)
+* kubectl (client)
+* Kubernetes API Server (server)
+
+The other components, mainly the `scheduler` and `controller manager`, access the Kubernetes API server locally over the insecure API port which does not require authentication. The insecure port is only enabled for local access.
+
+Download the example token file:
 
 ```
 wget https://raw.githubusercontent.com/kelseyhightower/kubernetes-the-hard-way/master/token.csv
 ```
 
+Review the example token file and replace the default token.
+
 ```
 cat token.csv
 ```
+
+Move the token file into the Kubernetes configuration directory so it can be read by the Kubernetes API server.
 
 ```
 sudo mv token.csv /var/lib/kubernetes/
@@ -87,15 +102,21 @@ sudo mv token.csv /var/lib/kubernetes/
 
 ##### Authorization
 
-Attribute-Based Access Control (ABAC) will be used to authorize access to the Kubernetes API. In this lab ABAC will be setup using the Kuberentes policy file backend as documented in the [Kubernetes authorization guide](http://kubernetes.io/docs/admin/authorization).
+Attribute-Based Access Control (ABAC) will be used to authorize access to the Kubernetes API. In this lab ABAC will be setup using the Kubernetes policy file backend as documented in the [Kubernetes authorization guide](http://kubernetes.io/docs/admin/authorization).
+
+Download the example authorization policy file:
 
 ```
 wget https://raw.githubusercontent.com/kelseyhightower/kubernetes-the-hard-way/master/authorization-policy.jsonl
 ```
 
+Review the example authorization policy file. No changes are required.
+
 ```
 cat authorization-policy.jsonl
 ```
+
+Move the authorization policy file into the Kubernetes configuration directory so it can be read by the Kubernetes API server.
 
 ```
 sudo mv authorization-policy.jsonl /var/lib/kubernetes/
@@ -105,10 +126,20 @@ sudo mv authorization-policy.jsonl /var/lib/kubernetes/
 
 Capture the internal IP address:
 
+#### GCE
+
 ```
-export INTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" \
+INTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" \
   http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
 ```
+
+#### AWS
+
+```
+INTERNAL_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+```
+
+---
 
 Create the systemd unit file:
 
@@ -272,6 +303,8 @@ etcd-2               Healthy   {"health": "true"}
 
 The virtual machines created in this tutorial will not have permission to complete this section. Run the following commands from the same place used to create the virtual machines for this tutorial. 
 
+### GCE
+
 ```
 gcloud compute http-health-checks create kube-apiserver-check \
   --description "Kubernetes API Server Health Check" \
@@ -281,8 +314,7 @@ gcloud compute http-health-checks create kube-apiserver-check \
 
 ```
 gcloud compute target-pools create kubernetes-pool \
-  --health-check kube-apiserver-check \
-  --region us-central1
+  --health-check kube-apiserver-check
 ```
 
 ```
@@ -291,13 +323,21 @@ gcloud compute target-pools add-instances kubernetes-pool \
 ```
 
 ```
-export KUBERNETES_PUBLIC_IP_ADDRESS=$(gcloud compute addresses describe kubernetes \
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes \
   --format 'value(address)')
 ```
 
 ```
 gcloud compute forwarding-rules create kubernetes-rule \
-  --address ${KUBERNETES_PUBLIC_IP_ADDRESS} \
+  --address ${KUBERNETES_PUBLIC_ADDRESS} \
   --ports 6443 \
   --target-pool kubernetes-pool
+```
+
+### AWS
+
+```
+aws elb register-instances-with-load-balancer \
+  --load-balancer-name kubernetes \
+  --instances ${CONTROLLER_0_INSTANCE_ID} ${CONTROLLER_1_INSTANCE_ID} ${CONTROLLER_2_INSTANCE_ID}
 ```

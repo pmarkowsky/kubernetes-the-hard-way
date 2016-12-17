@@ -5,7 +5,7 @@
 ### OS X
 
 ```
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/darwin/amd64/kubectl
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/darwin/amd64/kubectl
 chmod +x kubectl
 sudo mv kubectl /usr/local/bin
 ```
@@ -13,7 +13,7 @@ sudo mv kubectl /usr/local/bin
 ### Linux
 
 ```
-wget https://storage.googleapis.com/kubernetes-release/release/v1.3.0/bin/linux/amd64/kubectl
+wget https://storage.googleapis.com/kubernetes-release/release/v1.4.0/bin/linux/amd64/kubectl
 chmod +x kubectl
 sudo mv kubectl /usr/local/bin
 ```
@@ -22,15 +22,26 @@ sudo mv kubectl /usr/local/bin
 
 In this section you will configure the kubectl client to point to the [Kubernetes API Server Frontend Load Balancer](04-kubernetes-controller.md#setup-kubernetes-api-server-frontend-load-balancer).
 
+### GCE
+
 ```
-export KUBERNETES_PUBLIC_IP_ADDRESS=$(gcloud compute addresses describe kubernetes \
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes \
   --format 'value(address)')
 ```
+
+### AWS
+
+```
+KUBERNETES_PUBLIC_ADDRESS=$(aws elb describe-load-balancers \
+  --load-balancer-name kubernetes | \
+  jq -r '.LoadBalancerDescriptions[].DNSName')
+```
+---
 
 Recall the token we setup for the admin user:
 
 ```
-# /var/run/kubernetes/token.csv on the controller nodes
+# /var/lib/kubernetes/token.csv on the controller nodes
 chAng3m3,admin,admin
 ```
 
@@ -44,7 +55,7 @@ The following commands will build up the default kubeconfig file used by kubectl
 kubectl config set-cluster kubernetes-the-hard-way \
   --certificate-authority=ca.pem \
   --embed-certs=true \
-  --server=https://${KUBERNETES_PUBLIC_IP_ADDRESS}:6443
+  --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443
 ```
 
 ```

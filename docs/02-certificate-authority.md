@@ -120,12 +120,26 @@ openssl x509 -in ca.pem -text -noout
 
 In this section we will generate a TLS certificate that will be valid for all Kubernetes components. This is being done for ease of use. In production you should strongly consider generating individual TLS certificates for each component.
 
-Create the `kubernetes-csr.json` file:
+### Set the Kubernetes Public Address
+
+#### GCE
 
 ```
-export KUBERNETES_PUBLIC_IP_ADDRESS=$(gcloud compute addresses describe kubernetes \
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes \
   --format 'value(address)')
 ```
+
+#### AWS
+
+```
+KUBERNETES_PUBLIC_ADDRESS=$(aws elb describe-load-balancers \
+  --load-balancer-name kubernetes | \
+  jq -r '.LoadBalancerDescriptions[].DNSName')
+```
+
+---
+
+Create the `kubernetes-csr.json` file:
 
 ```
 cat > kubernetes-csr.json <<EOF
@@ -135,6 +149,9 @@ cat > kubernetes-csr.json <<EOF
     "worker0",
     "worker1",
     "worker2",
+    "ip-10-240-0-20",
+    "ip-10-240-0-21",
+    "ip-10-240-0-22",
     "10.32.0.1",
     "10.240.0.10",
     "10.240.0.11",
@@ -142,10 +159,7 @@ cat > kubernetes-csr.json <<EOF
     "10.240.0.20",
     "10.240.0.21",
     "10.240.0.22",
-    "10.240.0.30",
-    "10.240.0.31",
-    "10.240.0.32",
-    "${KUBERNETES_PUBLIC_IP_ADDRESS}",
+    "${KUBERNETES_PUBLIC_ADDRESS}",
     "127.0.0.1"
   ],
   "key": {
@@ -192,14 +206,36 @@ openssl x509 -in kubernetes.pem -text -noout
 
 ## Copy TLS Certs
 
+Set the list of Kubernetes hosts where the certs should be copied to:
+
 ```
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem controller0:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem controller1:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem controller2:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem etcd0:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem etcd1:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem etcd2:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem worker0:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem worker1:~/
-gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem worker2:~/
+KUBERNETES_HOSTS=(controller0 controller1 controller2 worker0 worker1 worker2)
+```
+
+### GCE
+
+The following command will:
+
+* Copy the TLS certificates and keys to each Kubernetes host using the `gcloud compute copy-files` command.
+
+```
+for host in ${KUBERNETES_HOSTS[*]}; do
+  gcloud compute copy-files ca.pem kubernetes-key.pem kubernetes.pem ${host}:~/
+done
+```
+
+### AWS
+
+The following command will:
+ * Extract the public IP address for each Kubernetes host
+ * Copy the TLS certificates and keys to each Kubernetes host using `scp`
+
+```
+for host in ${KUBERNETES_HOSTS[*]}; do
+  PUBLIC_IP_ADDRESS=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=${host}" | \
+    jq -j '.Reservations[].Instances[].PublicIpAddress')
+  scp ca.pem kubernetes-key.pem kubernetes.pem \
+    ubuntu@${PUBLIC_IP_ADDRESS}:~/
+done
 ```
